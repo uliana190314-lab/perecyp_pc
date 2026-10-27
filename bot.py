@@ -30,6 +30,7 @@ def normalize_turso_url(url: str) -> str:
 
 turso_client = None
 
+# ================== СОСТОЯНИЯ ==================
 class TradeStates(StatesGroup):
     waiting_item_price = State()
     waiting_pc_price = State()
@@ -130,7 +131,8 @@ async def get_inv(uid):
 
 async def add_inv(uid, item_idx, price=None, broken=0):
     if price is None: price = CATALOG[item_idx]["price"]
-    await turso_client.execute("INSERT INTO inventory(user_id, item_idx, price, broken) VALUES(?,?,?,?)", [uid, item_idx, price, broken])
+    await turso_client.execute("INSERT INTO inventory(user_id, item_idx, price, broken) VALUES(?,?,?,?)",
+                               [uid, item_idx, price, broken])
 
 async def del_inv(inv_id):
     await turso_client.execute("DELETE FROM inventory WHERE id=?", [inv_id])
@@ -138,149 +140,380 @@ async def del_inv(inv_id):
 async def upd_inv(inv_id, price, broken):
     await turso_client.execute("UPDATE inventory SET price=?, broken=? WHERE id=?", [price, broken, inv_id])
 
-# ================== БОТ (Хэндлеры) ==================
+async def set_last_gift(uid, ts):
+    await turso_client.execute("UPDATE users SET last_gift=? WHERE user_id=?", [ts, uid])
+
+# ================== БОТ ==================
 bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop"), InlineKeyboardButton(text="🏪 Рынок", callback_data="market")],
-        [InlineKeyboardButton(text="📦 Инвентарь", callback_data="inv"), InlineKeyboardButton(text="🖥️ Собрать ПК", callback_data="asm")],
+        [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop"),
+         InlineKeyboardButton(text="🏪 Рынок", callback_data="market")],
+        [InlineKeyboardButton(text="📦 Инвентарь", callback_data="inv"),
+         InlineKeyboardButton(text="🖥️ Собрать ПК", callback_data="asm")],
         [InlineKeyboardButton(text="💰 Баланс", callback_data="bal")],
     ])
+
+def shop_kb():
+    rows = []
+    for i in range(0, len(CATS), 2):
+        row = [InlineKeyboardButton(text=CATS[i][1], callback_data=f"c:{CATS[i][0]}")]
+        if i+1 < len(CATS):
+            row.append(InlineKeyboardButton(text=CATS[i+1][1], callback_data=f"c:{CATS[i+1][0]}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="« Меню", callback_data="main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def items_kb(cat):
+    rows = []
+    for idx, item in enumerate(CATALOG):
+        if item["cat"] != cat: continue
+        text = f"{item['icon']} {item['name']} — {item['price']}₽"
+        if item.get("broken"): text += " ⚠"
+        rows.append([InlineKeyboardButton(text=text, callback_data=f"b:{idx}")])
+    rows.append([InlineKeyboardButton(text="« Категории", callback_data="shop")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+async def inv_content(uid):
+    rows = await get_inv(uid)
+    if not rows:
+        return ("📦 <b>Инвентарь пуст</b>\nКупи что-нибудь в /shop", main_menu())
+    text = "📦 <b>Твой инвентарь:</b>\n\n"
+    kb_rows = []
+    for inv_id, item_idx, price, broken in rows:
+        item = CATALOG[item_idx]
+        mark = " ⚠" if broken else ""
+        text += f"• {item['icon']} {item['name']} — {price}₽{mark}\n"
+        
+        row = [
+            InlineKeyboardButton(text=f"💰 Продать", callback_data=f"s:{inv_id}"),
+            InlineKeyboardButton(text=f"🏷️ На рынок", callback_data=f"lst:{inv_id}")
+        ]
+        if broken:
+            row.insert(0, InlineKeyboardButton(text="🔧 Починить", callback_data=f"r:{inv_id}"))
+        kb_rows.append(row)
+    kb_rows.append([InlineKeyboardButton(text="« Меню", callback_data="main")])
+    return (text, InlineKeyboardMarkup(inline_keyboard=kb_rows))
+
+async def build_pc(uid):
+    rows = await get_inv(uid)
+    picked = {}
+    for inv_id, item_idx, price, broken in rows:
+        if broken: continue
+        item = CATALOG[item_idx]
+        slot = item.get("slot")
+        if slot and slot not in picked:
+            picked[slot] = (inv_id, item)
+    slots = ["cpu","mb","ram","gpu","psu","storage","case","cooler"]
+    labels = {"cpu":"Процессор","mb":"Мат.плата","ram":"ОЗУ","gpu":"Видеокарта",
+              "psu":"БП","storage":"Диск","case":"Корпус","cooler":"Кулер"}
+    problems = []; total = 0; ids = []
+    lines = "🖥️ <b>Сборка ПК</b>\n\n"
+    for s in slots:
+        if s in picked:
+            inv_id, item = picked[s]
+            lines += f"✅ {labels[s]}: {item['name']}\n"
+            total += item["price"]; ids.append(inv_id)
+        else:
+            lines += f"❌ {labels[s]}: нет\n"
+    if "cpu" in picked and "mb" in picked:
+        if picked["cpu"][1].get("socket") != picked["mb"][1].get("socket"):
+            problems.append("Сокет CPU ≠ мат.платы")
+    if "mb" in picked and "ram" in picked:
+        if picked["mb"][1].get("ddr") != picked["ram"][1].get("ddr"):
+            problems.append("DDR платы ≠ DDR памяти")
+    missing = [s for s in slots if s not in picked]
+    lines += f"\n💰 Стоимость: {total} ₽\n"
+    if problems:
+        lines += "\n⚠ <b>Проблемы:</b>\n" + "\n".join(problems)
+        return lines, None
+    if missing:
+        lines += f"\nНе хватает: {len(missing)} шт."
+        return lines, None
+    sale = int(total * 1.35)
+    lines += f"\n🎉 <b>ПК собран!</b>\nМожно продать государству за {sale} ₽ или выставить на рынок!"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💰 Продать за {sale}₽", callback_data=f"asell:{sale}:{','.join(map(str,ids))}")],
+        [InlineKeyboardButton(text="🏷️ Выставить на рынок", callback_data=f"pclst:{','.join(map(str,ids))}")]
+    ])
+    return lines, kb
+
+async def market_content():
+    rs = await turso_client.execute("SELECT id, seller_name, item_idx, price, broken, is_pc, pc_data FROM market ORDER BY id DESC LIMIT 15")
+    rows = rs.rows
+    
+    if not rows:
+        return "🏪 <b>Рынок пуст</b>\nНикто пока ничего не продает.", main_menu()
+    
+    text = "🏪 <b>Рынок игроков (последние 15 лотов):</b>\n\n"
+    kb_rows = []
+    for m_id, s_name, item_idx, m_price, broken, is_pc, pc_data in rows:
+        if is_pc:
+            name = "🖥️ Собранный ПК"
+        else:
+            item = CATALOG[item_idx]
+            name = f"{item['icon']} {item['name']}"
+            if broken: name += " ⚠"
+            
+        text += f"• {name} от <b>{s_name}</b> — {m_price}₽\n"
+        kb_rows.append([InlineKeyboardButton(text=f"Купить {name[:15]} ({m_price}₽)", callback_data=f"mbuy:{m_id}")])
+    
+    kb_rows.append([InlineKeyboardButton(text="« Меню", callback_data="main")])
+    return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+# ================== ХЭНДЛЕРЫ ==================
 
 @dp.message(Command("start"))
 async def start(m: Message):
     u = await get_user(m.from_user.id, m.from_user.username or "")
-    await m.answer(f"👋 Привет, {m.from_user.first_name}!\n💰 Баланс: <b>{u['balance']} ₽</b>\n\n/start, /shop, /inv, /market", reply_markup=main_menu())
+    await m.answer(
+        f"👋 <b>Привет, {m.from_user.first_name}!</b>\n\n"
+        f"💰 Баланс: <b>{u['balance']} ₽</b>\n\n"
+        f"Ты — перекуп ПК. Покупай железо, чини, собирай компы и продавай!\n\n"
+        f"/shop — магазин\n/inv — инвентарь\n/get — подарок\n"
+        f"/balance — баланс\n/assemble — собрать ПК\n/market — рынок игроков",
+        reply_markup=main_menu()
+    )
 
-@dp.callback_query(F.data == "main")
-async def cb_main(cb: CallbackQuery):
-    u = await get_user(cb.from_user.id)
-    await cb.message.edit_text(f"👋 <b>Меню</b>\n💰 Баланс: <b>{u['balance']} ₽</b>", reply_markup=main_menu())
+@dp.message(Command("market"))
+async def market_cmd(m: Message):
+    text, kb = await market_content()
+    await m.answer(text, reply_markup=kb)
+
+@dp.callback_query(F.data == "market")
+async def cb_market(cb: CallbackQuery):
+    text, kb = await market_content()
+    await cb.message.edit_text(text, reply_markup=kb)
     await cb.answer()
 
-# (Другие хэндлеры бота: магазин, инвентарь, подарок - они уже были в предыдущих файлах, 
-# чтобы не раздувать код, я оставил только базу для API. Бот работает по старой логике)
-
-# ================== API ДЛЯ HTML ==================
-@web.middleware
-async def cors_middleware(request, handler):
-    if request.method == 'OPTIONS':
-        response = web.Response()
-    else:
-        response = await handler(request)
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return response
-
-async def api_get_user(request):
-    uid = int(request.match_info['user_id'])
-    u = await get_user(uid, "WebUser")
-    inv = await get_inv(uid)
-    inv_data = [{"id": r[0], "item_idx": r[1], "price": r[2], "broken": r[3], "name": CATALOG[r[1]]["name"], "icon": CATALOG[r[1]]["icon"], "slot": CATALOG[r[1]].get("slot"), "socket": CATALOG[r[1]].get("socket"), "ddr": CATALOG[r[1]].get("ddr")} for r in inv]
-    return web.json_response({"balance": u["balance"], "inventory": inv_data})
-
-async def api_buy(request):
-    data = await request.json()
-    uid, idx = data['user_id'], data['item_idx']
-    item = CATALOG[idx]
-    u = await get_user(uid)
-    if u["balance"] < item["price"]: return web.json_response({"error": "Не хватает денег"}, status=400)
-    await upd_balance(uid, -item["price"])
-    await add_inv(uid, idx, broken=1 if item.get("broken") else 0)
-    return web.json_response({"status": "ok"})
-
-async def api_sell(request):
-    data = await request.json()
-    uid, inv_id = data['user_id'], data['inv_id']
-    rs = await turso_client.execute("SELECT price, broken FROM inventory WHERE id=? AND user_id=?", [inv_id, uid])
-    if not rs.rows: return web.json_response({"error": "Не найдено"}, status=404)
-    price, broken = rs.rows[0]
-    sale = int(price * 0.85) if not broken else int(price * 0.85 * 0.5)
-    await upd_balance(uid, sale)
-    await del_inv(inv_id)
-    return web.json_response({"status": "ok"})
-
-async def api_repair(request):
-    data = await request.json()
-    uid, inv_id = data['user_id'], data['inv_id']
-    rs = await turso_client.execute("SELECT price, broken FROM inventory WHERE id=? AND user_id=?", [inv_id, uid])
-    if not rs.rows or not rs.rows[0][1]: return web.json_response({"error": "Нечего чинить"}, status=400)
-    price = rs.rows[0][0]
-    cost = int(price * 0.2)
-    u = await get_user(uid)
-    if u["balance"] < cost: return web.json_response({"error": "Мало денег"}, status=400)
-    await upd_balance(uid, -cost)
-    await upd_inv(inv_id, int(price * 1.3), 0)
-    return web.json_response({"status": "ok"})
-
-# API для сборки ПК
-async def api_assemble(request):
-    data = await request.json()
-    uid, ids = data['user_id'], data['ids']
-    total = 0
-    for inv_id in ids:
-        rs = await turso_client.execute("SELECT price FROM inventory WHERE id=? AND user_id=?", [inv_id, uid])
-        if rs.rows:
-            total += rs.rows[0][0]
-            await del_inv(inv_id)
-    sale = int(total * 1.35)
-    await upd_balance(uid, sale)
-    return web.json_response({"status": "ok", "sale": sale})
-
-# API для рынка
-async def api_market_get(request):
-    rs = await turso_client.execute("SELECT id, seller_name, item_idx, price, broken, is_pc FROM market ORDER BY id DESC LIMIT 20")
-    market_items = []
-    for r in rs.rows:
-        name = "🖥️ Собранный ПК" if r[5] else f"{CATALOG[r[2]]['icon']} {CATALOG[r[2]]['name']}"
-        market_items.append({"id": r[0], "seller": r[1], "name": name, "price": r[3], "broken": r[4], "is_pc": r[5]})
-    return web.json_response({"market": market_items})
-
-async def api_market_list(request):
-    data = await request.json()
-    uid, name, inv_id, price, is_pc = data['user_id'], data['name'], data['inv_id'], data['price'], data['is_pc']
-    
-    if is_pc:
-        parts_indices = []
-        for iid in inv_id:
-            rs = await turso_client.execute("SELECT item_idx FROM inventory WHERE id=? AND user_id=?", [iid, uid])
-            if rs.rows:
-                parts_indices.append(rs.rows[0][0])
-                await del_inv(iid)
-        await turso_client.execute("INSERT INTO market(seller_id, seller_name, item_idx, price, is_pc, pc_data) VALUES(?,?,?,?,?,?)", [uid, name, -1, price, 1, json.dumps(parts_indices)])
-    else:
-        rs = await turso_client.execute("SELECT item_idx, broken FROM inventory WHERE id=? AND user_id=?", [inv_id, uid])
-        if not rs.rows: return web.json_response({"error": "Не найдено"}, status=404)
-        item_idx, broken = rs.rows[0]
-        await del_inv(inv_id)
-        await turso_client.execute("INSERT INTO market(seller_id, seller_name, item_idx, price, broken) VALUES(?,?,?,?,?)", [uid, name, item_idx, price, broken])
-    return web.json_response({"status": "ok"})
-
-async def api_market_buy(request):
-    data = await request.json()
-    buyer_id, m_id = data['user_id'], data['market_id']
+@dp.callback_query(F.data.startswith("mbuy:"))
+async def cb_mbuy(cb: CallbackQuery):
+    m_id = int(cb.data.split(":")[1])
     rs = await turso_client.execute("SELECT seller_id, item_idx, price, broken, is_pc, pc_data FROM market WHERE id=?", [m_id])
-    if not rs.rows: return web.json_response({"error": "Лот не найден"}, status=404)
+    if not rs.rows:
+        await cb.answer("❌ Этот лот уже продан!", show_alert=True); return
+        
     seller_id, item_idx, m_price, broken, is_pc, pc_data = rs.rows[0]
+    buyer_id = cb.from_user.id
     
+    if buyer_id == seller_id:
+        await cb.answer("❌ Вы не можете купить свой собственный лот!", show_alert=True); return
+        
     u = await get_user(buyer_id)
-    if u["balance"] < m_price: return web.json_response({"error": "Не хватает денег"}, status=400)
-    
+    if u["balance"] < m_price:
+        await cb.answer("❌ Не хватает денег!", show_alert=True); return
+        
     await upd_balance(buyer_id, -m_price)
     await upd_balance(seller_id, m_price)
     
-    if is_pc:
-        for p_idx in json.loads(pc_data): await add_inv(buyer_id, p_idx)
+    if is_pc == 1:
+        parts = json.loads(pc_data)
+        for p_idx in parts:
+            await add_inv(buyer_id, p_idx)
     else:
         await add_inv(buyer_id, item_idx, price=m_price, broken=broken)
         
     await turso_client.execute("DELETE FROM market WHERE id=?", [m_id])
-    return web.json_response({"status": "ok"})
+    
+    await cb.answer("✅ Успешно куплено!", show_alert=True)
+    text, kb = await market_content()
+    await cb.message.edit_text(text, reply_markup=kb)
 
-# ================== ВЕБ-СЕРВЕР ==================
+@dp.callback_query(F.data.startswith("lst:"))
+async def cb_list_item(cb: CallbackQuery, state: FSMContext):
+    inv_id = int(cb.data.split(":")[1])
+    await state.update_data(list_inv_id=inv_id, list_is_pc=False)
+    await cb.message.answer("🏷️ <b>Введите цену</b>, за которую хотите выставить этот предмет (числом):")
+    await state.set_state(TradeStates.waiting_item_price)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("pclst:"))
+async def cb_list_pc(cb: CallbackQuery, state: FSMContext):
+    ids_str = cb.data.split(":")[1]
+    ids = [int(x) for x in ids_str.split(",")]
+    await state.update_data(list_pc_ids=ids, list_is_pc=True)
+    await cb.message.answer("🏷️ <b>Введите цену</b> для вашего собранного ПК (числом):")
+    await state.set_state(TradeStates.waiting_pc_price)
+    await cb.answer()
+
+@dp.message(TradeStates.waiting_item_price)
+async def process_item_price(m: Message, state: FSMContext):
+    if not m.text or not m.text.isdigit():
+        await m.answer("❌ Пожалуйста, введите целое число (без букв)."); return
+    price = int(m.text)
+    data = await state.get_data()
+    inv_id = data['list_inv_id']
+    
+    rs = await turso_client.execute("SELECT id, item_idx, price, broken FROM inventory WHERE id=? AND user_id=?", [inv_id, m.from_user.id])
+    if not rs.rows:
+        await m.answer("❌ Предмет не найден в инвентаре."); await state.clear(); return
+        
+    _, item_idx, old_price, broken = rs.rows[0]
+    
+    await del_inv(inv_id)
+    await turso_client.execute("INSERT INTO market(seller_id, seller_name, item_idx, price, broken) VALUES(?,?,?,?,?)",
+                               [m.from_user.id, m.from_user.first_name, item_idx, price, broken])
+    
+    await m.answer(f"✅ Вы выставили <b>{CATALOG[item_idx]['name']}</b> на рынок за <b>{price}₽</b>!")
+    await state.clear()
+
+@dp.message(TradeStates.waiting_pc_price)
+async def process_pc_price(m: Message, state: FSMContext):
+    if not m.text or not m.text.isdigit():
+        await m.answer("❌ Пожалуйста, введите целое число (без букв)."); return
+    price = int(m.text)
+    data = await state.get_data()
+    ids = data['list_pc_ids']
+    
+    parts_indices = []
+    for inv_id in ids:
+        rs = await turso_client.execute("SELECT id, item_idx FROM inventory WHERE id=? AND user_id=?", [inv_id, m.from_user.id])
+        if rs.rows:
+            parts_indices.append(rs.rows[0][1])
+            await del_inv(inv_id)
+            
+    await turso_client.execute("INSERT INTO market(seller_id, seller_name, item_idx, price, broken, is_pc, pc_data) VALUES(?,?,?,?,?,?,?)",
+                               [m.from_user.id, m.from_user.first_name, -1, price, 0, 1, json.dumps(parts_indices)])
+    
+    await m.answer(f"✅ Вы выставили <b>Собранный ПК</b> на рынок за <b>{price}₽</b>!")
+    await state.clear()
+
+@dp.message(Command("shop"))
+async def shop_cmd(m: Message):
+    await m.answer("🛒 <b>Магазин</b>\nВыбери категорию:", reply_markup=shop_kb())
+
+@dp.message(Command("inv"))
+async def inv_cmd(m: Message):
+    text, kb = await inv_content(m.from_user.id)
+    await m.answer(text, reply_markup=kb)
+
+@dp.message(Command("balance"))
+async def balance_cmd(m: Message):
+    u = await get_user(m.from_user.id)
+    await m.answer(f"💰 Твой баланс: <b>{u['balance']} ₽</b>")
+
+@dp.message(Command("assemble"))
+async def assemble_cmd(m: Message):
+    text, kb = await build_pc(m.from_user.id)
+    await m.answer(text, reply_markup=kb)
+
+@dp.message(Command("get"))
+async def get_gift(m: Message):
+    u = await get_user(m.from_user.id, m.from_user.username or "")
+    now = datetime.now()
+    if u["last_gift"]:
+        last = datetime.fromisoformat(u["last_gift"])
+        left = 86400 - int((now - last).total_seconds())
+        if left > 0:
+            h, rem = divmod(left, 3600)
+            await m.answer(f"⏳ Подарок уже получен.\nСледующий через {h}ч {rem//60}м")
+            return
+    idx = random.randrange(len(CATALOG))
+    item = CATALOG[idx]
+    await add_inv(m.from_user.id, idx, broken=1 if item.get("broken") else 0)
+    await set_last_gift(m.from_user.id, now.isoformat())
+    await m.answer(
+        f"🎁 <b>Ежедневный подарок!</b>\n\n"
+        f"Тебе выпало: {item['icon']} <b>{item['name']}</b>\n"
+        f"Стоимость: {item['price']} ₽\n\n"
+        f"Загляни в /inv — там уже лежит!"
+    )
+
+@dp.callback_query(F.data.startswith("c:"))
+async def cb_cat(cb: CallbackQuery):
+    cat = cb.data[2:]
+    name = dict(CATS).get(cat, cat)
+    await cb.message.edit_text(f"{name}\nЖми на товар, чтобы купить:", reply_markup=items_kb(cat))
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("b:"))
+async def cb_buy(cb: CallbackQuery):
+    idx = int(cb.data[2:]); item = CATALOG[idx]
+    u = await get_user(cb.from_user.id)
+    if u["balance"] < item["price"]:
+        await cb.answer("❌ Не хватает денег!", show_alert=True); return
+    await upd_balance(cb.from_user.id, -item["price"])
+    await add_inv(cb.from_user.id, idx, broken=1 if item.get("broken") else 0)
+    await cb.answer(f"✅ Куплено: {item['name']} за {item['price']}₽", show_alert=True)
+
+@dp.callback_query(F.data == "shop")
+async def cb_shop(cb: CallbackQuery):
+    await cb.message.edit_text("🛒 <b>Магазин</b>\nВыбери категорию:", reply_markup=shop_kb())
+    await cb.answer()
+
+@dp.callback_query(F.data == "main")
+async def cb_main(cb: CallbackQuery):
+    u = await get_user(cb.from_user.id)
+    await cb.message.edit_text(
+        f"👋 <b>Меню</b>\n💰 Баланс: <b>{u['balance']} ₽</b>",
+        reply_markup=main_menu()
+    )
+    await cb.answer()
+
+@dp.callback_query(F.data == "inv")
+async def cb_inv(cb: CallbackQuery):
+    text, kb = await inv_content(cb.from_user.id)
+    await cb.message.edit_text(text, reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data == "bal")
+async def cb_bal(cb: CallbackQuery):
+    u = await get_user(cb.from_user.id)
+    await cb.answer(f"💰 Баланс: {u['balance']}₽", show_alert=True)
+
+@dp.callback_query(F.data == "asm")
+async def cb_asm(cb: CallbackQuery):
+    text, kb = await build_pc(cb.from_user.id)
+    await cb.message.answer(text, reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("s:"))
+async def cb_sell(cb: CallbackQuery):
+    inv_id = int(cb.data[2:])
+    rs = await turso_client.execute("SELECT id, item_idx, price, broken FROM inventory WHERE id=? AND user_id=?", [inv_id, cb.from_user.id])
+    if not rs.rows:
+        await cb.answer("Не найдено", show_alert=True); return
+    _, item_idx, price, broken = rs.rows[0]
+    item = CATALOG[item_idx]
+    sale = int(price * 0.85)
+    if broken: sale = int(sale * 0.5)
+    await upd_balance(cb.from_user.id, sale); await del_inv(inv_id)
+    await cb.answer(f"💰 Продано государству: {item['name']} за {sale}₽", show_alert=True)
+    text, kb = await inv_content(cb.from_user.id)
+    try: await cb.message.edit_text(text, reply_markup=kb)
+    except: pass
+
+@dp.callback_query(F.data.startswith("r:"))
+async def cb_repair(cb: CallbackQuery):
+    inv_id = int(cb.data[2:])
+    rs = await turso_client.execute("SELECT id, item_idx, price, broken FROM inventory WHERE id=? AND user_id=?", [inv_id, cb.from_user.id])
+    if not rs.rows or not rs.rows[0][3]:
+        await cb.answer("Нечего чинить", show_alert=True); return
+    _, item_idx, price, broken = rs.rows[0]
+    cost = int(price * 0.2)
+    u = await get_user(cb.from_user.id)
+    if u["balance"] < cost:
+        await cb.answer(f"Нужно {cost}₽ на ремонт", show_alert=True); return
+    await upd_balance(cb.from_user.id, -cost)
+    await upd_inv(inv_id, int(price * 1.3), 0)
+    await cb.answer(f"🔧 Починено за {cost}₽", show_alert=True)
+    text, kb = await inv_content(cb.from_user.id)
+    try: await cb.message.edit_text(text, reply_markup=kb)
+    except: pass
+
+@dp.callback_query(F.data.startswith("asell:"))
+async def cb_asell(cb: CallbackQuery):
+    _, sale, ids = cb.data.split(":")
+    sale = int(sale); ids = [int(x) for x in ids.split(",")]
+    for i in ids: await del_inv(i)
+    await upd_balance(cb.from_user.id, sale)
+    await cb.message.edit_text(f"🎉 ПК продан государству за <b>{sale} ₽</b>!")
+    await cb.answer()
+
+# ================== ВЕБ-СЕРВЕР И WEBHOOK ==================
 async def on_startup(bot: Bot):
     render_url = os.getenv("RENDER_EXTERNAL_URL")
     if render_url:
@@ -292,24 +525,18 @@ async def main():
     global turso_client
     turso_client = libsql_client.create_client(url=normalize_turso_url(TURSO_URL), auth_token=TURSO_TOKEN)
     await db_init()
+    print("✅ База данных Turso инициализирована")
     
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application()
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path="/webhook")
+    
+    async def health(request):
+        return web.Response(text="Bot is running")
+    app.router.add_get("/", health)
+    
     dp.startup.register(on_startup)
     setup_application(app, dp, bot=bot)
-    
-    app.router.add_get("/api/user/{user_id}", api_get_user)
-    app.router.add_post("/api/buy", api_buy)
-    app.router.add_post("/api/sell", api_sell)
-    app.router.add_post("/api/repair", api_repair)
-    app.router.add_post("/api/assemble", api_assemble)
-    app.router.add_get("/api/market", api_market_get)
-    app.router.add_post("/api/market/list", api_market_list)
-    app.router.add_post("/api/market/buy", api_market_buy)
-    
-    async def health(request): return web.Response(text="Server is running")
-    app.router.add_get("/", health)
     
     port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
