@@ -23,8 +23,8 @@ TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 if not TOKEN or not TURSO_URL or not TURSO_TOKEN:
     raise RuntimeError("Не заданы переменные окружения: BOT_TOKEN, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN")
 
-# Клиент для Turso
-turso_client = libsql_client.create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)
+# Глобальная переменная — клиент создадим позже, внутри main()
+turso_client = None
 
 # ================== СОСТОЯНИЯ ==================
 class TradeStates(StatesGroup):
@@ -530,6 +530,11 @@ async def on_startup(bot: Bot):
     print(f"✅ Webhook установлен на {webhook_url}")
 
 async def main():
+    global turso_client
+    # Инициализируем клиент Turso внутри работающего event loop
+    turso_client = libsql_client.create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)
+    print("✅ Клиент Turso создан")
+
     await db_init()
     print("✅ База данных Turso инициализирована")
     
