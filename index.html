@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Перекуп ПК — Веб-версия</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #f5f6f8; color: #1f1f1f; font-size: 14px; }
+  .topbar { background: #fff; border-bottom: 1px solid #e3e5e8; padding: 10px 20px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+  .logo { font-weight: 700; font-size: 20px; color: #00aaff; }
+  .logo span { color: #ff6163; }
+  .budget { background: #e8f7ee; color: #1a7f3f; padding: 8px 14px; border-radius: 8px; font-weight: 600; margin-left: auto; }
+  .nav-btn { background: #f0f2f5; border: none; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+  .nav-btn:hover { background: #e5e8ed; }
+  .cats { background: #fff; padding: 12px 20px; display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid #e3e5e8; position: sticky; top: 61px; z-index: 99; }
+  .cat { padding: 8px 14px; border-radius: 20px; background: #f0f2f5; cursor: pointer; font-size: 13px; border: 1px solid transparent; }
+  .cat.active { background: #00aaff; color: #fff; }
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 16px; padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+  .items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .item { background: #fff; border-radius: 10px; padding: 14px; border: 1px solid #e3e5e8; display: flex; flex-direction: column; gap: 6px; }
+  .item-icon { font-size: 32px; text-align: center; padding: 10px 0; background: #f8f9fb; border-radius: 8px; }
+  .item-name { font-weight: 600; font-size: 14px; }
+  .item-price { font-weight: 700; font-size: 17px; margin-top: auto; }
+  .item-buy { background: #00aaff; color: #fff; border: none; padding: 8px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+  .item-buy:disabled { background: #d1d5db; }
+  .sidebar { background: #fff; border-radius: 10px; padding: 16px; border: 1px solid #e3e5e8; max-height: calc(100vh - 150px); overflow-y: auto; }
+  .inv-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: #f8f9fb; border-radius: 8px; font-size: 12px; margin-bottom: 6px; }
+  .btn-mini { border: none; padding: 4px 8px; border-radius: 6px; font-size: 11px; cursor: pointer; font-weight: 600; margin-left: 4px; }
+  .btn-repair { background: #fef3c7; color: #92400e; }
+  .btn-sell { background: #d1fae5; color: #065f46; }
+  .btn-market { background: #e0e7ff; color: #3730a3; }
+  #loginModal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+  .login-box { background: #fff; padding: 20px; border-radius: 12px; width: 300px; text-align: center; }
+  .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 8px; }
+  .login-box button { width: 100%; padding: 10px; background: #00aaff; color: #fff; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
+  .modal.show { display: flex; }
+  .modal-content { background: #fff; padding: 20px; border-radius: 12px; max-width: 500px; width: 100%; max-height: 80vh; overflow-y: auto; }
+</style>
+</head>
+<body>
+
+<div id="loginModal">
+  <div class="login-box">
+    <h2>Вход в игру</h2>
+    <p style="font-size:12px;color:#666;margin-top:5px">Введи свой Telegram ID (узнать можно у @userinfobot)</p>
+    <input type="number" id="tgIdInput" placeholder="Например, 123456789">
+    <button onclick="login()">Войти</button>
+  </div>
+</div>
+
+<div class="topbar" style="display:none;" id="mainApp">
+  <div class="logo">АВИТО<span>·</span>PC</div>
+  <button class="nav-btn" onclick="openMarket()">🏪 Рынок</button>
+  <button class="nav-btn" onclick="openAssemble()">🖥️ Собрать ПК</button>
+  <div class="budget" id="budget">💰 Загрузка...</div>
+</div>
+<div class="cats" style="display:none;" id="catsBar"></div>
+<div class="layout" style="display:none;" id="mainLayout">
+  <div><div class="items-grid" id="items"></div></div>
+  <div class="sidebar">
+    <h3>📦 Инвентарь</h3>
+    <div id="invList"></div>
+  </div>
+</div>
+
+<div class="modal" id="marketModal">
+  <div class="modal-content">
+    <h2>🏪 Рынок игроков</h2>
+    <div id="marketList" style="margin-top: 15px;"></div>
+    <button class="nav-btn" style="width:100%; margin-top:15px;" onclick="closeModal('marketModal')">Закрыть</button>
+  </div>
+</div>
+
+<div class="modal" id="assembleModal">
+  <div class="modal-content" id="assembleContent"></div>
+</div>
+
+<script>
+const API_URL = "https://perecup-pc.onrender.com"; // Ссылка на твой сервер
+let USER_ID = null;
+let state = { budget: 0, inventory: [] };
+
+const CATALOG = [
+    {"cat":"cpu","name":"Pentium E5300","price":300,"slot":"cpu","socket":"LGA775","ddr":"DDR2","icon":"🧠"},
+    {"cat":"cpu","name":"Core 2 Quad Q6600","price":1200,"slot":"cpu","socket":"LGA775","ddr":"DDR2","icon":"🧠"},
+    {"cat":"cpu","name":"Core i5-3570K","price":2500,"slot":"cpu","socket":"LGA1155","ddr":"DDR3","icon":"🧠"},
+    {"cat":"cpu","name":"Core i7-4790K","price":5500,"slot":"cpu","socket":"LGA1150","ddr":"DDR3","icon":"🧠"},
+    {"cat":"cpu","name":"Core i5-10400F","price":6000,"slot":"cpu","socket":"LGA1200","ddr":"DDR4","icon":"🧠"},
+    {"cat":"cpu","name":"Core i5-12400F","price":9500,"slot":"cpu","socket":"LGA1700","ddr":"DDR4","icon":"🧠"},
+    {"cat":"cpu","name":"Ryzen 5 3600","price":6500,"slot":"cpu","socket":"AM4","ddr":"DDR4","icon":"🧠"},
+    {"cat":"cpu","name":"Ryzen 5 5600","price":8500,"slot":"cpu","socket":"AM4","ddr":"DDR4","icon":"🧠"},
+    {"cat":"cpu","name":"Ryzen 7 7800X3D","price":32000,"slot":"cpu","socket":"AM5","ddr":"DDR5","icon":"🧠"},
+    {"cat":"gpu","name":"GT 730","price":1500,"slot":"gpu","icon":"🎮"},
+    {"cat":"gpu","name":"GTX 1060 6GB","price":6500,"slot":"gpu","icon":"🎮"},
+    {"cat":"gpu","name":"GTX 1660 Super","price":12000,"slot":"gpu","icon":"🎮"},
+    {"cat":"gpu","name":"RTX 2060 (греется)","price":13000,"slot":"gpu","icon":"🎮","broken":true},
+    {"cat":"gpu","name":"RTX 3060 12GB","price":20000,"slot":"gpu","icon":"🎮"},
+    {"cat":"gpu","name":"RTX 4070","price":45000,"slot":"gpu","icon":"🎮"},
+    {"cat":"gpu","name":"RX 580 8GB (майнинг)","price":7000,"slot":"gpu","icon":"🎮","broken":true},
+    {"cat":"gpu","name":"RX 6700 XT","price":22000,"slot":"gpu","icon":"🎮"},
+    {"cat":"mb","name":"G31 (LGA775)","price":600,"slot":"mb","socket":"LGA775","ddr":"DDR2","icon":"🧩"},
+    {"cat":"mb","name":"H61 (LGA1155)","price":1200,"slot":"mb","socket":"LGA1155","ddr":"DDR3","icon":"🧩"},
+    {"cat":"mb","name":"Z97 (LGA1150)","price":4500,"slot":"mb","socket":"LGA1150","ddr":"DDR3","icon":"🧩"},
+    {"cat":"mb","name":"B560M (LGA1200)","price":3500,"slot":"mb","socket":"LGA1200","ddr":"DDR4","icon":"🧩"},
+    {"cat":"mb","name":"B450M (AM4)","price":4000,"slot":"mb","socket":"AM4","ddr":"DDR4","icon":"🧩"},
+    {"cat":"mb","name":"Z690 (LGA1700)","price":9000,"slot":"mb","socket":"LGA1700","ddr":"DDR4","icon":"🧩"},
+    {"cat":"mb","name":"B650 (AM5)","price":12000,"slot":"mb","socket":"AM5","ddr":"DDR5","icon":"🧩"},
+    {"cat":"ram","name":"DDR2 4GB 800","price":700,"slot":"ram","ddr":"DDR2","icon":"💾"},
+    {"cat":"ram","name":"DDR3 8GB 1600","price":1200,"slot":"ram","ddr":"DDR3","icon":"💾"},
+    {"cat":"ram","name":"DDR3 16GB 1600","price":2500,"slot":"ram","ddr":"DDR3","icon":"💾"},
+    {"cat":"ram","name":"DDR4 16GB 3200","price":3500,"slot":"ram","ddr":"DDR4","icon":"💾"},
+    {"cat":"ram","name":"DDR4 32GB 3600","price":7000,"slot":"ram","ddr":"DDR4","icon":"💾"},
+    {"cat":"ram","name":"DDR5 16GB 5200","price":6000,"slot":"ram","ddr":"DDR5","icon":"💾"},
+    {"cat":"ram","name":"DDR5 32GB 6000","price":12000,"slot":"ram","ddr":"DDR5","icon":"💾"},
+    {"cat":"storage","name":"HDD 1TB","price":1200,"slot":"storage","icon":"💿"},
+    {"cat":"storage","name":"SSD 512GB SATA","price":2000,"slot":"storage","icon":"💿"},
+    {"cat":"storage","name":"SSD 1TB NVMe","price":5000,"slot":"storage","icon":"💿"},
+    {"cat":"storage","name":"SSD 2TB Gen4","price":12000,"slot":"storage","icon":"💿"},
+    {"cat":"psu","name":"300W noname","price":700,"slot":"psu","watt":300,"icon":"⚡"},
+    {"cat":"psu","name":"500W noname","price":1500,"slot":"psu","watt":500,"icon":"⚡"},
+    {"cat":"psu","name":"650W Chieftec","price":3000,"slot":"psu","watt":650,"icon":"⚡"},
+    {"cat":"psu","name":"850W Be Quiet!","price":7000,"slot":"psu","watt":850,"icon":"⚡"},
+    {"cat":"psu","name":"1000W Seasonic","price":12000,"slot":"psu","watt":1000,"icon":"⚡"},
+    {"cat":"case","name":"ATX без стекла","price":1000,"slot":"case","icon":"📦"},
+    {"cat":"case","name":"Zalman RGB","price":2500,"slot":"case","icon":"📦"},
+    {"cat":"case","name":"Lian Li O11","price":8000,"slot":"case","icon":"📦"},
+    {"cat":"cooler","name":"Боксовый Intel","price":300,"slot":"cooler","icon":"❄️"},
+    {"cat":"cooler","name":"Башня 4 трубки","price":1200,"slot":"cooler","icon":"❄️"},
+    {"cat":"cooler","name":"Noctua NH-D15","price":4000,"slot":"cooler","icon":"❄️"},
+    {"cat":"cooler","name":"СЖО 360","price":12000,"slot":"cooler","icon":"❄️"},
+    {"cat":"periph","name":"Мышь офисная","price":200,"icon":"🖱️"},
+    {"cat":"periph","name":"Logitech G102","price":1200,"icon":"🖱️"},
+    {"cat":"periph","name":"Redragon клава","price":3000,"icon":"⌨️"},
+    {"cat":"periph","name":"Keychron","price":8000,"icon":"⌨️"},
+    {"cat":"periph","name":"Монитор 22\"","price":3000,"icon":"🖥️"},
+    {"cat":"periph","name":"Монитор 27\" 144Hz","price":12000,"icon":"🖥️"},
+    {"cat":"misc","name":"Термопаста","price":500,"icon":"🧴"},
+    {"cat":"misc","name":"Отвёртки","price":800,"icon":"🛠️"},
+    {"cat":"misc","name":"USB-хаб","price":300,"icon":"🔌"},
+];
+
+const CATS = [
+  {id:"cpu", name:"🧠 Процессоры"}, {id:"gpu", name:"🎮 Видеокарты"}, {id:"mb", name:"🧩 Платы"},
+  {id:"ram", name:"💾 ОЗУ"}, {id:"storage", name:"💿 Диски"}, {id:"psu", name:"⚡ БП"},
+  {id:"case", name:"📦 Корпуса"}, {id:"cooler", name:"❄️ Кулеры"},
+  {id:"periph", name:"🖱️ Периферия"}, {id:"misc", name:"🎁 Безделушки"}
+];
+let activeCat = "cpu";
+
+async function login() {
+  const id = document.getElementById('tgIdInput').value;
+  if(!id || id.length < 5) return alert("Введи корректный ID");
+  USER_ID = id;
+  localStorage.setItem('tgId', id);
+  document.getElementById('loginModal').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'flex';
+  document.getElementById('catsBar').style.display = 'flex';
+  document.getElementById('mainLayout').style.display = 'grid';
+  renderCats();
+  await fetchUserData();
+}
+
+function renderCats() {
+  document.getElementById('catsBar').innerHTML = CATS.map(c => 
+    `<div class="cat ${c.id === activeCat ? 'active' : ''}" onclick="changeCat('${c.id}')">${c.name}</div>`
+  ).join('');
+}
+
+function changeCat(id) {
+  activeCat = id;
+  renderCats();
+  renderItems();
+}
+
+function renderItems() {
+  const el = document.getElementById('items');
+  const items = CATALOG.filter(i => i.cat === activeCat);
+  el.innerHTML = items.map((i, localIdx) => {
+    const globalIdx = CATALOG.indexOf(i); // Получаем правильный индекс
+    const canBuy = state.budget >= i.price;
+    return `
+      <div class="item">
+        <div class="item-icon">${i.icon || '📦'}</div>
+        <div class="item-name">${i.name}</div>
+        <div class="item-price">${i.price} ₽</div>
+        <button class="item-buy" ${canBuy ? '' : 'disabled'} onclick="buyItem(${globalIdx})">
+          ${canBuy ? 'Купить' : 'Нет денег'}
+        </button>
+      </div>`;
+  }).join('');
+}
+
+function renderInv() {
+  const el = document.getElementById('invList');
+  if(state.inventory.length === 0) {
+    el.innerHTML = '<div style="color:#999;text-align:center;padding:20px">Пусто</div>';
+    return;
+  }
+  el.innerHTML = state.inventory.map(inv => `
+    <div class="inv-item">
+      <span>${inv.icon} ${inv.name}</span>
+      <div>
+        ${inv.broken ? `<button class="btn-mini btn-repair" onclick="repairItem(${inv.id})">🔧</button>` : ''}
+        <button class="btn-mini btn-market" onclick="listItemOnMarket(${inv.id}, '${inv.name}', ${inv.price})">🏷️</button>
+        <button class="btn-mini btn-sell" onclick="sellItem(${inv.id})">💰</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function fetchUserData() {
+  document.getElementById('budget').innerText = "💰 Загрузка...";
+  try {
+    const res = await fetch(`${API_URL}/api/user/${USER_ID}`);
+    const data = await res.json();
+    state.budget = data.balance;
+    state.inventory = data.inventory;
+    document.getElementById('budget').innerText = `💰 ${state.budget.toLocaleString()} ₽`;
+    renderItems();
+    renderInv();
+  } catch (e) {
+    alert("Ошибка связи с сервером. Подожди 30 сек (он просыпается).");
+  }
+}
+
+async function buyItem(idx) {
+  const res = await fetch(`${API_URL}/api/buy`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, item_idx: idx}) });
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+  await fetchUserData();
+}
+
+async function sellItem(inv_id) {
+  const res = await fetch(`${API_URL}/api/sell`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, inv_id: inv_id}) });
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+  await fetchUserData();
+}
+
+async function repairItem(inv_id) {
+  const res = await fetch(`${API_URL}/api/repair`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, inv_id: inv_id}) });
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+  await fetchUserData();
+}
+
+async function listItemOnMarket(inv_id, name, price) {
+  const p = prompt(`За сколько выставить ${name}?`, price);
+  if(!p || isNaN(p)) return;
+  const res = await fetch(`${API_URL}/api/market/list`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, name: name, inv_id: inv_id, price: parseInt(p), is_pc: false}) });
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+  alert("✅ Выставлено на рынок!");
+  await fetchUserData();
+}
+
+// Рынок
+async function openMarket() {
+  document.getElementById('marketModal').classList.add('show');
+  const res = await fetch(`${API_URL}/api/market`);
+  const data = await res.json();
+  const el = document.getElementById('marketList');
+  
+  if(data.market.length === 0) {
+    el.innerHTML = '<div style="color:#999;text-align:center;">Пусто...</div>';
+    return;
+  }
+  
+  el.innerHTML = data.market.map(m => `
+    <div class="inv-item">
+      <span>${m.name} от ${m.seller}</span>
+      <div>
+        <span style="font-weight:bold; margin-right:10px;">${m.price}₽</span>
+        <button class="btn-mini btn-sell" onclick="buyFromMarket(${m.id})">Купить</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function buyFromMarket(market_id) {
+  const res = await fetch(`${API_URL}/api/market/buy`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, market_id: market_id}) });
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+  alert("✅ Куплено с рынка!");
+  closeModal('marketModal');
+  await fetchUserData();
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+// Сборка ПК
+function openAssemble() {
+  const slots = ["cpu","mb","ram","gpu","psu","storage","case","cooler"];
+  const labels = {cpu:"Процессор", mb:"Мат.плата", ram:"ОЗУ", gpu:"Видеокарта", psu:"БП", storage:"Диск", case:"Корпус", cooler:"Кулер"};
+  const picked = {};
+  
+  // Собираем по одному рабочему предмету на слот
+  for (const s of slots) {
+    const found = state.inventory.find(i => i.slot === s && !i.broken);
+    if (found) picked[s] = found;
+  }
+  
+  let html = `<h2>🖥️ Сборка ПК</h2>`;
+  let total = 0;
+  let ids = [];
+  let missing = 0;
+  
+  for (const s of slots) {
+    if (picked[s]) {
+      html += `<div style="padding:8px 0;border-bottom:1px solid #eee">✅ ${labels[s]}: ${picked[s].name}</div>`;
+      total += picked[s].price;
+      ids.push(picked[s].id);
+    } else {
+      html += `<div style="padding:8px 0;border-bottom:1px solid #eee;color:#c00">❌ ${labels[s]}: нет</div>`;
+      missing++;
+    }
+  }
+  
+  html += `<div style="margin-top:15px; font-weight:bold;">💰 Стоимость: ${total} ₽</div>`;
+  
+  if(missing > 0) {
+    html += `<div style="margin-top:10px; color:#c00">Не хватает ${missing} деталей (или они сломаны).</div>`;
+  } else {
+    const sale = Math.floor(total * 1.35);
+    html += `<button class="nav-btn" style="width:100%; margin-top:15px; background:#d1fae5; color:#065f46;" onclick="sellBuiltPC([${ids.join(',')}], ${sale})">💰 Собрать и продать за ${sale}₽</button>`;
+    html += `<button class="nav-btn" style="width:100%; margin-top:10px; background:#e0e7ff; color:#3730a3;" onclick="listPCOnMarket([${ids.join(',')}])">🏷️ Выставить на рынок</button>`;
+  }
+  
+  html += `<button class="nav-btn" style="width:100%; margin-top:10px;" onclick="closeModal('assembleModal')">Закрыть</button>`;
+  
+  document.getElementById('assembleContent').innerHTML = html;
+  document.getElementById('assembleModal').classList.add('show');
+}
+
+async function sellBuiltPC(ids, sale) {
+  if(!confirm(`Продать собранный ПК за ${sale}₽?`)) return;
+  const res = await fetch(`${API_URL}/api/assemble`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, ids: ids}) });
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+  alert(`✅ ПК продан за ${data.sale}₽!`);
+  closeModal('assembleModal');
+  await fetchUserData();
+}
+
+async function listPCOnMarket(ids) {
+  const p = prompt(`За сколько выставить собранный ПК?`, 20000);
+  if(!p || isNaN(p)) return;
+  const res = await fetch(`${API_URL}/api/market/list`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_id: USER_ID, name: "Собранный ПК", inv_id: ids, price: parseInt(p), is_pc: true}) });
+  const data = await res.json();
+  if(data.error) return alert(data.error);
+  alert("✅ ПК выставлен на рынок!");
+  closeModal('assembleModal');
+  await fetchUserData();
+}
+
+window.onload = () => {
+  const saved = localStorage.getItem('tgId');
+  if(saved) {
+    document.getElementById('tgIdInput').value = saved;
+    login();
+  }
+};
+</script>
+</body>
+  </html>
