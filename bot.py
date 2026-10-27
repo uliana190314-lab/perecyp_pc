@@ -10,8 +10,8 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-# Токен берётся из переменной окружения на Render
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN не задан! Добавь переменную окружения на Render.")
@@ -386,24 +386,48 @@ async def cb_asell(cb: CallbackQuery):
     await cb.message.edit_text(f"🎉 ПК продан за <b>{sale} ₽</b>!")
     await cb.answer()
 
-# ================== ВЕБ-СЕРВЕР ДЛЯ RENDER ==================
-async def health(request):
-    return web.Response(text="Bot is running")
+# ================== ВЕБ-СЕРВЕР И WEBHOOK ==================
+async def on_startup(bot: Bot):
+    # Render автоматически передает URL сайта в переменную RENDER_EXTERNAL_URL
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    if not render_url:
+        print("⚠️ Переменная RENDER_EXTERNAL_URL не найдена. Webhook не установится.")
+        return
+    
+    webhook_url = f"{render_url}/webhook"
+    # drop_pending_updates=True очищает старые сообщения, которые застряли
+    await bot.set_webhook(webhook_url, drop_pending_updates=True)
+    print(f"✅ Webhook установлен на {webhook_url}")
 
 async def main():
-    # Веб-сервер-заглушка (Render требует открытый порт)
-    app_web = web.Application()
-    app_web.router.add_get("/", health)
-    runner = web.AppRunner(app_web)
-    await runner.setup()
+    app = web.Application()
+    
+    # Настраиваем обработчик вебхуков
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+    )
+    webhook_requests_handler.register(app, path="/webhook")
+    
+    # Health-check для Render (чтобы не ругался)
+    async def health(request):
+        return web.Response(text="Bot is running via Webhook")
+    app.router.add_get("/", health)
+    
+    # Регистрируем установку вебхука при старте
+    dp.startup.register(on_startup)
+    setup_application(app, dp, bot=bot)
+    
+    # Запускаем веб-сервер
     port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Web server on port {port}")
-
-    # Запуск бота
-    print("🤖 Бот запущен")
-    await dp.start_polling(bot)
+    print(f"🌐 Веб-сервер запущен на порту {port}")
+    
+    # Держим сервер запущенным вечно
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
