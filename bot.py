@@ -23,6 +23,12 @@ TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 if not TOKEN or not TURSO_URL or not TURSO_TOKEN:
     raise RuntimeError("Не заданы переменные окружения: BOT_TOKEN, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN")
 
+# Функция нормализации URL: libsql:// -> https://
+def normalize_turso_url(url: str) -> str:
+    if url.startswith("libsql://"):
+        return "https://" + url[len("libsql://"):]
+    return url
+
 # Глобальная переменная — клиент создадим позже, внутри main()
 turso_client = None
 
@@ -531,8 +537,10 @@ async def on_startup(bot: Bot):
 
 async def main():
     global turso_client
-    # Инициализируем клиент Turso внутри работающего event loop
-    turso_client = libsql_client.create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)
+    # Нормализуем URL: libsql:// -> https://
+    normalized_url = normalize_turso_url(TURSO_URL)
+    print(f"🔗 Подключение к Turso через {normalized_url}")
+    turso_client = libsql_client.create_client(url=normalized_url, auth_token=TURSO_TOKEN)
     print("✅ Клиент Turso создан")
 
     await db_init()
